@@ -2,36 +2,36 @@
   {
     "type": "function",
     "name": "train_model",
-    "start_offset": 0.0013043880462646484,
-    "end_offset": 0.9722065925598145,
-    "duration": 0.9709022045135498
+    "start_offset": 0.0018191337585449219,
+    "end_offset": 1.1311404705047607,
+    "duration": 1.1293213367462158
   },
   {
     "type": "region",
     "name": "training_loop",
-    "start_offset": 2.4627835750579834,
-    "end_offset": 3.034611463546753,
-    "duration": 0.5718278884887695
+    "start_offset": 4.2033421993255615,
+    "end_offset": 4.8150012493133545,
+    "duration": 0.611659049987793
   },
   {
     "type": "region",
     "name": "evaluation",
-    "start_offset": 3.0346338748931885,
-    "end_offset": 3.04479718208313,
-    "duration": 0.010163307189941406
+    "start_offset": 4.815039157867432,
+    "end_offset": 4.825720310211182,
+    "duration": 0.01068115234375
   },
   {
     "type": "region",
     "name": "inner_region",
-    "start_offset": 3.0449347496032715,
-    "end_offset": 3.055018186569214,
-    "duration": 0.010083436965942383
+    "start_offset": 4.825830459594727,
+    "end_offset": 4.835911273956299,
+    "duration": 0.010080814361572266
   },
   {
     "type": "function",
     "name": "outer_function",
-    "start_offset": 3.04491925239563,
-    "end_offset": 3.0550248622894287,
-    "duration": 0.010105609893798828
+    "start_offset": 4.8258140087127686,
+    "end_offset": 4.835918426513672,
+    "duration": 0.01010441780090332
   }
 ]

@@ -2,10 +2,59 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import json
 from pathlib import Path
-from typing import Optional, Union, List, Dict, Any
+from typing import Optional, Union, List, Dict, Any, Tuple
 import numpy as np
 from datetime import datetime
 import os
+from pprint import pprint
+
+def calculate_energy_consumption(
+    df: pd.DataFrame,
+    records: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """
+    Calculate energy consumption for each function execution period.
+    
+    Args:
+        df: DataFrame containing power and timestamp data
+        records: List of function execution records with start and end times
+        
+    Returns:
+        List of records with added energy consumption information
+    """
+    energy_records = []
+    
+    for record in records:
+        # Get data points within the function execution period
+        mask = (df['rel_time_ms'] >= record['start_offset']) & (df['rel_time_ms'] <= record['end_offset'])
+        period_data = df[mask]
+        
+        if len(period_data) < 2:
+            continue
+            
+        # Calculate time differences in seconds
+        time_diffs = np.diff(period_data['rel_time_ms']) / 1000.0  # Convert to seconds
+        
+        # Calculate average power for each interval
+        avg_powers = (period_data['power_draw[W]'].values[:-1] + period_data['power_draw[W]'].values[1:]) / 2
+        
+        # Calculate energy consumption (E = P * t)
+        energy_consumption = np.sum(avg_powers * time_diffs)  # in Joules
+        
+        # Create energy record
+        energy_record = {
+            'name': record['name'],
+            'type': record['type'],
+            'start_time': record['start_offset'],
+            'end_time': record['end_offset'],
+            'duration_ms': record['end_offset'] - record['start_offset'],
+            'energy_joules': energy_consumption,
+            'avg_power_watts': energy_consumption / (record['end_offset'] - record['start_offset']) * 1000  # Convert to watts
+        }
+        
+        energy_records.append(energy_record)
+    
+    return energy_records
 
 def plot_gpu_metrics(
     log_file: Union[str, Path],
@@ -13,103 +62,111 @@ def plot_gpu_metrics(
     t0_file: Union[str, Path] = "gpu_logs/t0.txt",
     save_path: Optional[Union[str, Path]] = None,
     show: bool = True
-) -> None:
+) -> Tuple[Optional[pd.DataFrame], Optional[List[Dict[str, Any]]]]:
     """
     Plot GPU metrics including utilization, temperature, power, and clock speeds.
     Add background highlighting for different code regions and function calls.
     The x-axis is relative time (ms) from the start of the log (t0).
+    
+    Returns:
+        Tuple of (DataFrame with processed data, List of energy consumption records)
     """
+    # Read t0 (UNIX timestamp)
+    if not os.path.exists(t0_file):
+        print(f"Warning: t0 file {t0_file} does not exist. Skipping visualization.")
+        return None, None
+    with open(t0_file, 'r') as f:
+        t0 = float(f.read().strip())
+    
     # Check if log file exists and has content
     if not os.path.exists(log_file) or os.path.getsize(log_file) == 0:
         print(f"Warning: Log file {log_file} is empty or does not exist. Skipping visualization.")
-        return
+        return None, None
     try:
         df = pd.read_csv(log_file)
         if df.empty:
             print(f"Warning: No data found in log file {log_file}. Skipping visualization.")
-            return
+            return None, None
         df.columns = ['timestamp', 'utilization_gpu[%]', 'pstate', 'temperature_gpu[C]', 
                      'clocks_current_sm[MHz]', 'power_draw[W]', 'power_draw_instant[W]']
         
-        print("Original timestamps:")
-        print(df['timestamp'].head())
+        # Convert timestamps to milliseconds since epoch using datetime
+        df['timestamp'] = df['timestamp'].apply(lambda x: int(datetime.strptime(x, '%Y/%m/%d %H:%M:%S.%f').timestamp() * 1000))
         
-        # Convert timestamps to milliseconds since epoch
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df['timestamp'] = df['timestamp'].astype(np.int64) // 10**6  # Convert to milliseconds
-        
-        print("Timestamps in milliseconds:")
-        print(df['timestamp'].head())
-        
-        # Use first timestamp as t0
-        t0_ms = df['timestamp'].iloc[0]
-        print(f"Using first timestamp as t0: {t0_ms}")
+        # Convert t0 to milliseconds
+        t0_ms = int(t0 * 1000)
             
         # Adjust time relative to t0 and ensure proper numeric format
         df['rel_time_ms'] = (df['timestamp'] - t0_ms).astype(np.int64)
-        
-        print("Relative timestamps:")
-        print(df['rel_time_ms'].head())
         
         # Only filter out negative timestamps
         df = df[df['rel_time_ms'] >= 0]
         
         if df.empty:
             print("Warning: No valid data points after timestamp adjustment. Skipping visualization.")
-            return
+            return None, None
+            
+        # Check if records file exists and has content
+        if not os.path.exists(records_file) or os.path.getsize(records_file) == 0:
+            print(f"Warning: Records file {records_file} is empty or does not exist. Plotting without region highlighting.")
+            records = []
+        else:
+            try:
+                with open(records_file, 'r') as f:
+                    records = json.load(f)
+                    # convert timestamp to milliseconds since epoch
+                    for record in records:
+                        record['start_offset'] *= 1000
+                        record['end_offset'] *= 1000
+            except Exception as e:
+                print(f"Error reading records file {records_file}: {str(e)}")
+                records = []
+                
+        # Calculate energy consumption for each function
+        energy_records = calculate_energy_consumption(df, records)
+        
+        # Create figure with subplots
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
+        fig.suptitle('GPU Metrics with Code Regions (Relative Time)')
+        if records:
+            colors = plt.cm.tab20(np.linspace(0, 1, len(records)))
+            color_map = {record['name']: color for record, color in zip(records, colors)}
+        else:
+            color_map = {}
+        # Plot GPU utilization with region backgrounds
+        plot_metric_with_regions(ax1, df, 'utilization_gpu[%]', 'GPU Utilization (%)', 
+                               records, color_map)
+        plot_metric_with_regions(ax2, df, 'temperature_gpu[C]', 'Temperature (°C)', 
+                               records, color_map)
+        plot_metric_with_regions(ax3, df, ['power_draw[W]', 'power_draw_instant[W]'], 
+                               'Power (W)', records, color_map,
+                               labels=['Average Power', 'Instant Power'])
+        plot_metric_with_regions(ax4, df, 'clocks_current_sm[MHz]', 'Clock Speed (MHz)', 
+                               records, color_map)
+        if records:
+            handles = [plt.Rectangle((0,0), 1, 1, color=color, alpha=0.3) 
+                      for color in color_map.values()]
+            labels = [f"{r['name']} ({'function' if r['type'] == 'function' else 'region'})" for r in records]
+            fig.legend(handles, labels, loc='center right', bbox_to_anchor=(0.98, 0.5))
+        plt.tight_layout()
+        if save_path:
+            try:
+                plt.savefig(save_path, bbox_inches='tight')
+                print(f"Plot saved to {save_path}")
+            except Exception as e:
+                print(f"Error saving plot to {save_path}: {str(e)}")
+        if show:
+            plt.show()
+        else:
+            plt.close()
+        
+        pprint(f"Energy records: {energy_records}")
+            
+        return df, energy_records
             
     except Exception as e:
         print(f"Error reading log file {log_file}: {str(e)}")
-        return
-    # Check if records file exists and has content
-    if not os.path.exists(records_file) or os.path.getsize(records_file) == 0:
-        print(f"Warning: Records file {records_file} is empty or does not exist. Plotting without region highlighting.")
-        records = []
-    else:
-        try:
-            with open(records_file, 'r') as f:
-                records = json.load(f)
-                # convert timestamp to milliseconds since epoch
-                for record in records:
-                    record['start_offset'] *= 1000
-                    record['end_offset'] *= 1000
-        except Exception as e:
-            print(f"Error reading records file {records_file}: {str(e)}")
-            records = []
-    # Create figure with subplots
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
-    fig.suptitle('GPU Metrics with Code Regions (Relative Time)')
-    if records:
-        colors = plt.cm.tab20(np.linspace(0, 1, len(records)))
-        color_map = {record['name']: color for record, color in zip(records, colors)}
-    else:
-        color_map = {}
-    # Plot GPU utilization with region backgrounds
-    plot_metric_with_regions(ax1, df, 'utilization_gpu[%]', 'GPU Utilization (%)', 
-                           records, color_map)
-    plot_metric_with_regions(ax2, df, 'temperature_gpu[C]', 'Temperature (°C)', 
-                           records, color_map)
-    plot_metric_with_regions(ax3, df, ['power_draw[W]', 'power_draw_instant[W]'], 
-                           'Power (W)', records, color_map,
-                           labels=['Average Power', 'Instant Power'])
-    plot_metric_with_regions(ax4, df, 'clocks_current_sm[MHz]', 'Clock Speed (MHz)', 
-                           records, color_map)
-    if records:
-        handles = [plt.Rectangle((0,0), 1, 1, color=color, alpha=0.3) 
-                  for color in color_map.values()]
-        labels = [f"{r['name']} ({'function' if r['type'] == 'function' else 'region'})" for r in records]
-        fig.legend(handles, labels, loc='center right', bbox_to_anchor=(0.98, 0.5))
-    plt.tight_layout()
-    if save_path:
-        try:
-            plt.savefig(save_path, bbox_inches='tight')
-            print(f"Plot saved to {save_path}")
-        except Exception as e:
-            print(f"Error saving plot to {save_path}: {str(e)}")
-    if show:
-        plt.show()
-    else:
-        plt.close()
+        return None, None
 
 def plot_metric_with_regions(
     ax: plt.Axes,
