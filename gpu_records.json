@@ -1,0 +1,37 @@
+[
+  {
+    "type": "function",
+    "name": "train_model",
+    "start_offset": 0.0013043880462646484,
+    "end_offset": 0.9722065925598145,
+    "duration": 0.9709022045135498
+  },
+  {
+    "type": "region",
+    "name": "training_loop",
+    "start_offset": 2.4627835750579834,
+    "end_offset": 3.034611463546753,
+    "duration": 0.5718278884887695
+  },
+  {
+    "type": "region",
+    "name": "evaluation",
+    "start_offset": 3.0346338748931885,
+    "end_offset": 3.04479718208313,
+    "duration": 0.010163307189941406
+  },
+  {
+    "type": "region",
+    "name": "inner_region",
+    "start_offset": 3.0449347496032715,
+    "end_offset": 3.055018186569214,
+    "duration": 0.010083436965942383
+  },
+  {
+    "type": "function",
+    "name": "outer_function",
+    "start_offset": 3.04491925239563,
+    "end_offset": 3.0550248622894287,
+    "duration": 0.010105609893798828
+  }
+]
