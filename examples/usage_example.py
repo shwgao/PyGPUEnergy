@@ -54,27 +54,24 @@ def outer_function():
     print("Outer function end")
 
 if __name__ == "__main__":
-    # # Get the singleton monitor instance
-    # monitor = GPUMonitor(gpu_id=0)
+    # Get the singleton monitor instance
+    monitor = GPUMonitor(gpu_id=0)
     
-    # print("Running decorated function example...")
-    # train_model()
+    print("Running decorated function example...")
+    train_model()
     
-    # print("\nRunning manual monitoring example...")
-    # manual_monitoring_example()
+    print("\nRunning manual monitoring example...")
+    manual_monitoring_example()
     
-    # print("\nRunning nested monitoring example...")
-    # outer_function()
+    print("\nRunning nested monitoring example...")
+    outer_function()
     
-    # # Save all records
-    # monitor.save_records("gpu_records.json")
-    
-    # monitor.stop_monitoring()
+    monitor.stop_monitoring()
      
     # Plot the latest log file
     from PyGPUEnergy.utils import get_latest_log_file
     latest_log = get_latest_log_file("gpu_logs")
     if latest_log:
-        plot_gpu_metrics(latest_log, save_path="gpu_metrics_plot.png")
+        plot_gpu_metrics(latest_log, save_path="gpu_logs/gpu_metrics_plot.png")
         
     # Stop monitoring

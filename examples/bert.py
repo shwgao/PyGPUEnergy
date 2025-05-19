@@ -1,22 +1,18 @@
 #!/usr/bin/env python3
 
-from transformers import BertTokenizer, BertModel
 import torch
 import time
 from faker import Faker
 
-import argparse
 import warnings
 
+from PyGPUEnergy.context import GPUMonitorContext
+from PyGPUEnergy.visualize import plot_gpu_metrics
+from transformers import BertTokenizer, BertModel
+
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-r', '--repeat', type=int)
-    parser.add_argument('-s', '--shifts', type=int)
-
-    args = parser.parse_args()
-
-    REPEAT = args.repeat
-    SHIFTS = args.shifts
+    REPEAT = 32
+    SHIFTS = 4
 
     warnings.filterwarnings('ignore')
 
@@ -65,8 +61,6 @@ def main():
 
     # Move the model to the GPU
     model = model.to(device)
-    start_ts = []
-    end_ts = []
 
     # warm up
     with torch.no_grad():  model(input_ids, attention_mask=attention_masks)
@@ -74,24 +68,19 @@ def main():
 
     with torch.no_grad():
         for i in range(SHIFTS):
-            start_ts.append(int(time.time() * 1_000_000))
-            for j in range(int(REPEAT/SHIFTS)):
-                model(input_ids, attention_mask=attention_masks)
-            torch.cuda.synchronize()
-            end_ts.append(int(time.time() * 1_000_000))
+            with GPUMonitorContext("bert", gpu_id=0):
+                for j in range(int(REPEAT/SHIFTS)):
+                    model(input_ids, attention_mask=attention_masks)
+                torch.cuda.synchronize()
             # sleep for 25 miliseconds
             time.sleep(0.025)
-
-    # Store timestamps in a file
-    with open("timestamps.csv", "w") as f:
-        f.write("timestamp\n")
-        for start, end in zip(start_ts, end_ts):
-            f.write(str(start) + "\n")
-            f.write(str(end) + "\n")
-
-    # print("Time spent per batch: {:.3f} ms".format((end_ts - start_ts) / 1000 / REPEAT))
-    # print("Total runtime: {:.3f} ms".format((end_ts - start_ts) / 1000))
 
 
 if __name__ == '__main__':
     main()
+    
+    # Plot the latest log file
+    from PyGPUEnergy.utils import get_latest_log_file
+    latest_log = get_latest_log_file("gpu_logs")
+    if latest_log:
+        plot_gpu_metrics(latest_log, save_path="gpu_logs/gpu_metrics_plot.png")

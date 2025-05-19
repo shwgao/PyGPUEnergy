@@ -6,59 +6,12 @@ from typing import Optional, Union, List, Dict, Any, Tuple
 import numpy as np
 from datetime import datetime
 import os
-from pprint import pprint
+from PyGPUEnergy.utils import calculate_energy_consumption
 
-def calculate_energy_consumption(
-    df: pd.DataFrame,
-    records: List[Dict[str, Any]]
-) -> List[Dict[str, Any]]:
-    """
-    Calculate energy consumption for each function execution period.
-    
-    Args:
-        df: DataFrame containing power and timestamp data
-        records: List of function execution records with start and end times
-        
-    Returns:
-        List of records with added energy consumption information
-    """
-    energy_records = []
-    
-    for record in records:
-        # Get data points within the function execution period
-        mask = (df['rel_time_ms'] >= record['start_offset']) & (df['rel_time_ms'] <= record['end_offset'])
-        period_data = df[mask]
-        
-        if len(period_data) < 2:
-            continue
-            
-        # Calculate time differences in seconds
-        time_diffs = np.diff(period_data['rel_time_ms']) / 1000.0  # Convert to seconds
-        
-        # Calculate average power for each interval
-        avg_powers = (period_data['power_draw[W]'].values[:-1] + period_data['power_draw[W]'].values[1:]) / 2
-        
-        # Calculate energy consumption (E = P * t)
-        energy_consumption = np.sum(avg_powers * time_diffs)  # in Joules
-        
-        # Create energy record
-        energy_record = {
-            'name': record['name'],
-            'type': record['type'],
-            'start_time': record['start_offset'],
-            'end_time': record['end_offset'],
-            'duration_ms': record['end_offset'] - record['start_offset'],
-            'energy_joules': energy_consumption,
-            'avg_power_watts': energy_consumption / (record['end_offset'] - record['start_offset']) * 1000  # Convert to watts
-        }
-        
-        energy_records.append(energy_record)
-    
-    return energy_records
 
 def plot_gpu_metrics(
     log_file: Union[str, Path],
-    records_file: Union[str, Path] = "gpu_records.json",
+    records_file: Union[str, Path] = "gpu_logs/gpu_records_0.json",
     t0_file: Union[str, Path] = "gpu_logs/t0.txt",
     save_path: Optional[Union[str, Path]] = None,
     show: bool = True
@@ -160,7 +113,8 @@ def plot_gpu_metrics(
         else:
             plt.close()
         
-        pprint(f"Energy records: {energy_records}")
+        for record in energy_records:
+            print(f"Energy: {record['name']} {record['energy_joules']} {record['avg_power_watts']}")
             
         return df, energy_records
             

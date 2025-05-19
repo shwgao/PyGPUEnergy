@@ -9,6 +9,8 @@ from threading import Lock
 import json
 from datetime import datetime
 import atexit
+from PyGPUEnergy.utils import calculate_energy_consumption
+import numpy as np
 
 class GPUMonitor:
     _instance = None
@@ -21,6 +23,90 @@ class GPUMonitor:
                 cls._instance._initialized = False
             return cls._instance
     
+    def _validate_machine_info(self):
+        """Validate GPU and CUDA installation."""
+        def is_number(s):
+            try:    float(s)
+            except ValueError: return False
+            return True
+
+        # Validate GPU ID
+        if not isinstance(self.gpu_id, int) or self.gpu_id < 0:
+            raise ValueError(f"Invalid GPU ID: {self.gpu_id}. Must be a non-negative integer.")
+
+        # Check if nvidia-smi is available and get GPU info
+        try:
+            result = subprocess.run(['nvidia-smi', f'--id={self.gpu_id}', '--query-gpu=timestamp,name,serial,uuid,driver_version', '--format=csv,noheader'], 
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Failed to query GPU information: {e.stderr.decode()}")
+        except FileNotFoundError:
+            raise RuntimeError("nvidia-smi not found. Please ensure NVIDIA drivers are installed.")
+
+        output = result.stdout.decode().split('\n')[0].split(', ')
+        if len(output) != 5:
+            raise RuntimeError(f"Unexpected output format from nvidia-smi: {output}")
+            
+        self.nvsmi_time, self.gpu_name, self.gpu_serial, self.gpu_uuid, self.driver_version = output
+        self.gpu_name = self.gpu_name.replace(' ', '_')
+
+        # Validate CUDA installation - exit if not found
+        try:
+            result = subprocess.run(['nvcc', '--version'], capture_output=True, text=True, check=True)
+            output = result.stdout
+            if not output:
+                raise RuntimeError("nvcc --version returned empty output")
+            nvcc_version = output.split('\n')[3].split(',')[1].strip()
+            self.nvcc_version = nvcc_version
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            error_msg = "CUDA toolkit not found. This is a required dependency for GPU monitoring."
+            if isinstance(e, subprocess.CalledProcessError):
+                error_msg += f"\nError details: {e.stderr.decode()}"
+            raise RuntimeError(error_msg)
+
+        # Check supported power draw query options
+        try:
+            output = subprocess.run(['nvidia-smi', '--help-query-gpu'], 
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+            output = output.stdout.decode()
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Failed to query GPU power options: {e.stderr.decode()}")
+
+        # Initialize power draw options
+        self.pwr_draw_options = {
+            'utilization.gpu': False,
+            'pstate': False,
+            'temperature.gpu': False,
+            'clocks.current.sm': False,
+            'power.draw': False,
+            'power.draw.instant': False
+        }
+
+        query_options = '--query-gpu='
+        for key in self.pwr_draw_options.keys():
+            if output.find(key) != -1:
+                query_options += key + ','
+                self.pwr_draw_options[key] = True
+
+        if query_options == '--query-gpu=':
+            raise RuntimeError("No supported power draw query options found")
+
+        try:
+            output = subprocess.run(['nvidia-smi', f'--id={self.gpu_id}', query_options, '--format=csv,noheader,nounits'], 
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+            output = output.stdout.decode()[:-1].split(', ')
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Failed to query GPU power metrics: {e.stderr.decode()}")
+
+        if len(output) != len([v for v in self.pwr_draw_options.values() if v]):
+            raise RuntimeError(f"Mismatch in power draw metrics count. Expected {len([v for v in self.pwr_draw_options.values() if v])}, got {len(output)}")
+
+        for i, (key, value) in enumerate(self.pwr_draw_options.items()):
+            if value:
+                self.pwr_draw_options[key] = is_number(output[i])
+                if not self.pwr_draw_options[key]:
+                    print(f"Warning: Invalid power draw value for {key}: {output[i]}")
+
     def __init__(self, gpu_id: int = 0, sampling_period_ms: int = 50):
         """
         Initialize GPU monitor.
@@ -40,6 +126,10 @@ class GPUMonitor:
         self.records: List[Dict[str, Any]] = []
         self.t0: Optional[float] = None
         self.t0_file: Optional[Path] = None
+        
+        # Validate machine info before proceeding
+        self._validate_machine_info()
+        
         self._initialized = True
         
         # Register cleanup handlers
@@ -150,6 +240,8 @@ class GPUMonitor:
         except Exception as e:
             print(f"Error stopping monitoring: {str(e)}")
             
+        self.save_records(f"gpu_logs/gpu_records_{self.gpu_id}.json")
+            
         self.nvidia_pid = None
         self.is_recording = False
         
@@ -190,7 +282,30 @@ class GPUMonitor:
         df = pd.read_csv(self.log_file)
         df.columns = ['timestamp', 'utilization_gpu[%]', 'pstate', 'temperature_gpu[C]', 
                      'clocks_current_sm[MHz]', 'power_draw[W]', 'power_draw_instant[W]']
-        df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
+        
+        # Convert timestamps to milliseconds since epoch
+        df['timestamp'] = df['timestamp'].apply(lambda x: int(datetime.strptime(x, '%Y/%m/%d %H:%M:%S.%f').timestamp() * 1000))
+        
+        # Convert t0 to milliseconds
+        t0_ms = int(self.t0 * 1000)
+        
+        # Add relative time column
+        df['rel_time_ms'] = (df['timestamp'] - t0_ms).astype(np.int64)
+        
+        # Calculate energy consumption for each function
+        energy_records = calculate_energy_consumption(df, self.records)
+        
+        # Add energy consumption information to the DataFrame
+        df['energy_joules'] = np.nan
+        df['avg_power_watts'] = np.nan
+        
+        for record in energy_records:
+            mask = (df['rel_time_ms'] >= record['start_offset']) & (df['rel_time_ms'] <= record['end_offset'])
+            df.loc[mask, 'energy_joules'] = record['energy_joules']
+            df.loc[mask, 'avg_power_watts'] = record['avg_power_watts']
+            df.loc[mask, 'function_name'] = record['name']
+            df.loc[mask, 'function_type'] = record['type']
+        
         return df
         
     def save_records(self, output_file: str = "gpu_records.json") -> None:

@@ -1,6 +1,7 @@
-import os
+import pandas as pd
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Any, Dict
+import numpy as np
 
 def get_available_gpus() -> List[int]:
     """
@@ -58,3 +59,49 @@ def get_latest_log_file(log_dir: str) -> Optional[Path]:
         return None
         
     return max(log_files, key=lambda x: x.stat().st_mtime) 
+
+def calculate_energy_consumption(
+    df: pd.DataFrame,
+    records: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """
+    Calculate energy consumption for each function execution period using trapezoidal integration.
+    
+    Args:
+        df: DataFrame containing power and timestamp data
+        records: List of function execution records with start and end times
+        
+    Returns:
+        List of records with added energy consumption information
+    """
+    energy_records = []
+    
+    for record in records:
+        # Get data points within the function execution period
+        mask = (df['rel_time_ms'] >= record['start_offset']) & (df['rel_time_ms'] <= record['end_offset'])
+        period_data = df[mask]
+        
+        if len(period_data) < 2:
+            continue
+            
+        # Convert time to seconds for integration
+        time_seconds = period_data['rel_time_ms'].values / 1000.0
+        power_watts = period_data['power_draw[W]'].values
+        
+        # Calculate energy consumption using trapezoidal integration
+        energy_consumption = np.trapezoid(power_watts, time_seconds)  # in Joules
+        
+        # Create energy record
+        energy_record = {
+            'name': record['name'],
+            'type': record['type'],
+            'start_time': record['start_offset'],
+            'end_time': record['end_offset'],
+            'duration_ms': record['end_offset'] - record['start_offset'],
+            'energy_joules': energy_consumption,
+            'avg_power_watts': energy_consumption / (record['end_offset'] - record['start_offset']) * 1000  # Convert to watts
+        }
+        
+        energy_records.append(energy_record)
+    
+    return energy_records

@@ -1,2 +1,4 @@
 /gpu_logs
 /gpu_metrics_plot.png
+checkpoints
+**/__pycache__/
